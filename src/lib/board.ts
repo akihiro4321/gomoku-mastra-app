@@ -131,6 +131,8 @@ function getLine(
  * @param state - 現在のゲーム状態
  */
 export function createBoardInfo(state: GameState): BoardInfo {
+  const analysisText = generateAnalysisText(state);
+  
   return {
     boardText: formatBoardForLLM(state),
     lastMove: state.moveHistory.at(-1) ?? "",
@@ -138,6 +140,7 @@ export function createBoardInfo(state: GameState): BoardInfo {
     aiStones: getStonePositions(state, "O"),
     playerStones: getStonePositions(state, "X"),
     candidateMoves: getCandidateMoves(state),
+    analysisText,
   };
 }
 
@@ -217,6 +220,7 @@ export function findCriticalMove(state: GameState, selfPlayer: Player): Position
     }
   }
 
+  // 延長：三連を四連にされるのを防ぐなどはLLMまたは別の重要手検索に任せる
   return null;
 }
 
@@ -332,4 +336,209 @@ export function detectThreats(state: GameState, player: Player): string[] {
   return Array.from(threats.entries())
     .sort(([, a], [, b]) => b.length - a.length)
     .map(([move, data]) => `${move}(${data.length}連)`);
+}
+
+/**
+ * 高度な盤面解析（ヒューリスティック）
+ */
+interface GamePattern {
+  type: "Five" | "OpenFour" | "BlockedFour" | "OpenThree" | "BlockedThree";
+  player: Player;
+  positions: Position[];
+  recommendedMoves: Position[]; // 阻止、または完了のために打つべき場所
+  description: string;
+}
+
+export function analyzePatterns(state: GameState): GamePattern[] {
+  const patterns: GamePattern[] = [];
+  const board = state.board;
+
+  const directions = [
+    { dr: 0, dc: 1, name: "横" },
+    { dr: 1, dc: 0, name: "縦" },
+    { dr: 1, dc: 1, name: "斜め↘" },
+    { dr: 1, dc: -1, name: "斜め↙" },
+  ];
+
+  const players: Player[] = ["player", "ai"];
+
+  for (const player of players) {
+    const char = player === "player" ? "X" : "O";
+    const opponentChar = player === "player" ? "O" : "X";
+
+    for (let row = 0; row < 15; row++) {
+      for (let col = 0; col < 15; col++) {
+        for (const { dr, dc, name } of directions) {
+          const winSize = 5;
+          const segment: string[] = [];
+          const positions: Position[] = [];
+          
+          let outOfBounds = false;
+          for (let i = 0; i < winSize; i++) {
+            const r = row + dr * i;
+            const c = col + dc * i;
+            if (r >= 0 && r < 15 && c >= 0 && c < 15) {
+              segment.push(board[r][c]);
+              positions.push({ row: r, col: c });
+            } else {
+              outOfBounds = true;
+              break;
+            }
+          }
+
+          if (outOfBounds) continue;
+
+          const stoneCount = segment.filter(s => s === char).length;
+          const emptyCount = segment.filter(s => s === ".").length;
+          const opponentCount = segment.filter(s => s === opponentChar).length;
+
+          if (opponentCount > 0) continue;
+
+          // 推奨される手（この5マス内の空きマス）
+          const sementMoves = positions.filter((_, i) => segment[i] === ".");
+
+          // 1. 五連
+          if (stoneCount === 5) {
+            patterns.push({
+              type: "Five",
+              player,
+              positions: [...positions],
+              recommendedMoves: [],
+              description: `${name}に五連があります！勝利確定です。`,
+            });
+          }
+
+          // 2. 四連 (石4つ、空き1つ)
+          if (stoneCount === 4 && emptyCount === 1) {
+            const beforeR = row - dr;
+            const beforeC = col - dc;
+            const afterR = row + dr * 5;
+            const afterC = col + dc * 5;
+
+            const isBeforeOpen = beforeR >= 0 && beforeR < 15 && beforeC >= 0 && beforeC < 15 && board[beforeR][beforeC] === ".";
+            const isAfterOpen = afterR >= 0 && afterR < 15 && afterC >= 0 && afterC < 15 && board[afterR][afterC] === ".";
+
+            const isContinuous = !segment.includes(".");
+            if (isContinuous && isBeforeOpen && isAfterOpen) {
+              patterns.push({
+                type: "OpenFour",
+                player,
+                positions: [...positions],
+                recommendedMoves: [...sementMoves],
+                description: `${name}に活四（両端空きの4連）があります。王手です。`,
+              });
+            } else {
+              patterns.push({
+                type: "BlockedFour",
+                player,
+                positions: [...positions],
+                recommendedMoves: [...sementMoves],
+                description: `${name}に四連（${isContinuous ? "片端ブロック" : "隙間あり"}）があります。`,
+              });
+            }
+          }
+
+          // 3. 三連 (石3つ、空き2つ)
+          if (stoneCount === 3 && emptyCount === 2) {
+            const beforeR = row - dr;
+            const beforeC = col - dc;
+            const afterR = row + dr * 5;
+            const afterC = col + dc * 5;
+
+            const isBeforeOpen = beforeR >= 0 && beforeR < 15 && beforeC >= 0 && beforeC < 15 && board[beforeR][beforeC] === ".";
+            const isAfterOpen = afterR >= 0 && afterR < 15 && afterC >= 0 && afterC < 15 && board[afterR][afterC] === ".";
+
+            if (isBeforeOpen && isAfterOpen) {
+              // 活三は、内白（segment内の空き）だけでなく、両端（before, after）も重要
+              const totalRecommended = [...sementMoves];
+              if (isBeforeOpen) totalRecommended.push({ row: beforeR, col: beforeC });
+              if (isAfterOpen) totalRecommended.push({ row: afterR, col: afterC });
+
+              patterns.push({
+                type: "OpenThree",
+                player,
+                positions: positions.filter((_, i) => segment[i] === char),
+                recommendedMoves: totalRecommended,
+                description: `${name}に活三（次に活四を作れる手）があります。`,
+              });
+            } else if (isBeforeOpen || isAfterOpen) {
+              const totalRecommended = [...sementMoves];
+              if (isBeforeOpen) totalRecommended.push({ row: beforeR, col: beforeC });
+              if (isAfterOpen) totalRecommended.push({ row: afterR, col: afterC });
+
+              patterns.push({
+                type: "BlockedThree",
+                player,
+                positions: positions.filter((_, i) => segment[i] === char),
+                recommendedMoves: totalRecommended,
+                description: `${name}に三連（片端ブロック）があります。`,
+              });
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // 重複を削除
+  const uniquePatterns: GamePattern[] = [];
+  const seen = new Set<string>();
+
+  for (const p of patterns) {
+    const posKey = p.positions.map(pos => `${pos.row},${pos.col}`).sort().join("|");
+    const key = `${p.type}-${p.player}-${posKey}`;
+    if (!seen.has(key)) {
+      uniquePatterns.push(p);
+      seen.add(key);
+    }
+  }
+
+  return uniquePatterns;
+}
+
+export function generateAnalysisText(state: GameState): string {
+  const patterns = analyzePatterns(state);
+  
+  if (patterns.length === 0) return "特筆すべきパターンは見つかりませんでした。";
+
+  const aiPatterns = patterns.filter(p => p.player === "ai");
+  const playerPatterns = patterns.filter(p => p.player === "player");
+
+  let text = "【盤面高度解析結果 (V4)】\n";
+
+  const typePriority = {
+    "Five": 0,
+    "OpenFour": 1,
+    "BlockedFour": 2,
+    "OpenThree": 3,
+    "BlockedThree": 4
+  };
+
+  const sortPattern = (a: GamePattern, b: GamePattern) => typePriority[a.type] - typePriority[b.type];
+
+  const posToCoord = (p: Position) => `${String.fromCharCode(65 + p.col)}${p.row + 1}`;
+
+  if (playerPatterns.length > 0) {
+    text += "▼ 相手（X）の状況・阻止すべき場所:\n";
+    playerPatterns.sort(sortPattern).forEach(p => {
+      const recStr = p.recommendedMoves.length > 0 ? p.recommendedMoves.map(posToCoord).join(", ") : "勝利確定";
+      text += `- [${p.type}] ${p.description}\n  👉 阻止推奨座標: ${recStr}\n`;
+    });
+  } else {
+    text += "▼ 相手（X）の阻止が必要な急所はありません。\n";
+  }
+
+  text += "\n";
+
+  if (aiPatterns.length > 0) {
+    text += "▼ AI（O）の状況・狙い目:\n";
+    aiPatterns.sort(sortPattern).forEach(p => {
+      const recStr = p.recommendedMoves.length > 0 ? p.recommendedMoves.map(posToCoord).join(", ") : "勝利確定";
+      text += `- [${p.type}] ${p.description}\n  👉 攻撃推奨座標: ${recStr}\n`;
+    });
+  } else {
+    text += "▼ AI（O）の目立ったチャンスはありません。\n";
+  }
+
+  return text;
 }

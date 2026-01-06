@@ -2,10 +2,10 @@ import 'dotenv/config';
 import * as readline from "readline/promises";
 import { applyMove, checkWinner, initGameState } from "./lib/board";
 import {
-  formatBoard,
-  formatError,
-  formatGameEnd,
-  formatGameStart
+    formatBoard,
+    formatError,
+    formatGameEnd,
+    formatGameStart
 } from "./lib/display";
 import type { GameState } from "./lib/types";
 import { parseMove, validateInput } from "./lib/validation";
@@ -67,7 +67,7 @@ async function main(): Promise<void> {
     // 5-8. AI思考 & 手の反映
     console.log("\n💭 AI思考中...\n");
 
-    const workflow = mastra.getWorkflow("gomokuWorkflow");
+    const workflow = mastra.getWorkflow("gomokuWorkflowV2");
     const run = await workflow.createRun();
     const result = await run.start({
       inputData: { gameState }

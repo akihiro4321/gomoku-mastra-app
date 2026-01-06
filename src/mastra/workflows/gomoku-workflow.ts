@@ -1,6 +1,6 @@
 import { createStep, createWorkflow } from "@mastra/core/workflows";
 import z from "zod";
-import { createBoardInfo, findCriticalMove, detectThreats } from "../../lib/board";
+import { createBoardInfo, detectThreats, findCriticalMove } from "../../lib/board";
 import { AiDecisionSchema, AttackerProposalSchema, BoardInfoSchema, DefenderProposalSchema, GameStateSchema, MergeProposalsOutputSchema } from "../../lib/schemas";
 import { BoardInfo, GameState } from "../../lib/types";
 import { getEmptyPositions, isValidMove } from "../../lib/validation";
@@ -59,12 +59,16 @@ ${boardInfo.playerStones.join(", ") || "なし"}
 ## 直前の相手の手
 ${boardInfo.lastMove || "なし"}
 
+## 【重要】プログラムによる盤面解析
+${boardInfo.analysisText}
+
 ## 候補手（重要）
 以下のリストの中から、最も攻撃的に優れた手を選んでください。
 候補手: ${boardInfo.candidateMoves.join(", ")}
 
 ## 指示
-攻撃的な視点で次の一手を提案してください。
+プログラムによる盤面解析結果を参考に、攻撃的な視点で次の一手を提案してください。
+特に自分のチャンスを広げ、五連に結びつく手を優先してください。
     `;
     const response = await agent.generate(prompt, {
       structuredOutput: {
@@ -118,19 +122,16 @@ ${boardInfo.playerStones.join(", ") || "なし"}
 ## 直前の相手の手
 ${boardInfo.lastMove || "なし"}
 
-## 【重要】相手の脅威分析
-${threatsText}
+## 【重要】プログラムによる盤面解析
+${boardInfo.analysisText}
 
 ## 候補手（重要）
 以下のリストの中から、最も守備的に優れた手を選んでください。
 候補手: ${boardInfo.candidateMoves.join(", ")}
 
-## 重要な分析ポイント
-- 相手の脅威（上記）をすべてブロックすることが最優先
-- 複数の脅威がある場合、最も危険な脅威（4連に最も近い脅威）を優先
-
 ## 指示
-守備的な視点で次の一手を提案してください。相手の脅威をブロックすることを絶対に優先してください。
+プログラムによる盤面解析結果を参考に、守備的な視点で次の一手を提案してください。
+相手の脅威（特に四連や活三）をブロックすることを絶対に優先してください。
     `;
 
     const response = await agent.generate(prompt, {
@@ -293,8 +294,8 @@ const commanderDecisionStep = createStep({
 ${boardInfo.boardText}
 \`\`\`
 
-## 【重要】相手の脅威分析
-${threatsText}
+## 【重要】プログラムによる盤面解析
+${boardInfo.analysisText}
 
 ## 候補手（重要）
 以下のいずれかの提案から選ぶか、あるいはより良い手があれば ${boardInfo.candidateMoves.join(", ")} から選んでください。
@@ -308,20 +309,14 @@ ${threatsText}
 理由: ${defenderProposal!.reason}
 脅威: ${defenderProposal!.threat ?? "なし"}
 
-## 相手（X）の全石の位置
-${boardInfo.playerStones.join(", ") || "なし"}
-
-## 相手の最新の手
-${boardInfo.lastMove || "なし"}
-
 ## 指示
-以下の優先順位で最終的な手を決定してください：
-1. 相手の脅威（上記）が存在する場合、これをブロック（必須）
-2. 相手が四を作った場合、それを止める
-3. 自分の四を作る
-4. その他の戦略的な手
+プログラムによる盤面解析結果と、両エージェントの提案を総合して、以下の優先順位で最終的な手を決定してください：
+1. 自分が五連を作れるなら即座に勝利
+2. 相手の五連を阻止（四連をブロック）
+3. 相手の活三をブロック
+4. 自分の攻め手を伸ばす
 
-盤面全体を考慮して、最終的な手を決定してください。
+解析結果に記載されている「相手の脅威」は見落とさずに必ず対処してください。
     `;
 
     const response = await agent.generate(prompt, {
@@ -351,3 +346,79 @@ export const gomokuWorkflow = createWorkflow({
   .then(commanderDecisionStep);
 
 gomokuWorkflow.commit();
+
+// @ts-ignore
+const v2DecisionStep = createStep({
+  id: 'v2-decision-step',
+  inputSchema: z.object({
+    gameState: GameStateSchema,
+    boardInfo: BoardInfoSchema,
+  }),
+  outputSchema: z.object({
+    decision: AiDecisionSchema,
+  }),
+  execute: async ({ inputData, mastra }: any) => {
+    const { gameState, boardInfo } = inputData as { gameState: GameState; boardInfo: BoardInfo };
+
+    // ルールベースで見つかった決定的な手がある場合（フォールバック用。基本は解析結果を見てAIが判断するが、念の為）
+    const criticalMove = findCriticalMove(gameState, 'ai');
+    if (criticalMove) {
+      const move = `${String.fromCharCode(65 + criticalMove.col)}${criticalMove.row + 1}`;
+      return {
+        decision: {
+          move,
+          reason: "勝利確定、または敗北回避のための即時実行（ルールベース）",
+          comment: "重要局面と判断し、即座に着手しました。",
+          adoptedFrom: "own",
+        },
+      };
+    }
+
+    const agent = mastra?.getAgent("gomokuAgentV2");
+    if (!agent) throw new Error("Gomoku Agent V2 not found");
+
+    const prompt = `
+## 五目並べ AI (V2)
+
+## 現在の盤面
+\`\`\`
+${boardInfo.boardText}
+\`\`\`
+
+## 【重要】プログラムによる盤面解析
+${boardInfo.analysisText}
+
+## 候補手（重要）
+以下の候補手の中から最善の一手を選んでください。
+候補手: ${boardInfo.candidateMoves.join(", ")}
+
+## 指示
+解析結果を元に、勝利に向けた最善の一手を決定してください。
+相手の脅威がある場合は、それをブロックすることを最優先してください。
+    `;
+
+    const response = await agent.generate(prompt, {
+      structuredOutput: {
+        schema: AiDecisionSchema,
+      },
+    });
+
+    return {
+      decision: response.object,
+    };
+  }
+});
+
+export const gomokuWorkflowV2 = createWorkflow({
+  id: 'gomoku-workflow-v2',
+  inputSchema: z.object({
+    gameState: GameStateSchema,
+  }),
+  outputSchema: z.object({
+    decision: AiDecisionSchema,
+  })
+})
+  .then(createBoardInfoStep)
+  .then(v2DecisionStep);
+
+gomokuWorkflowV2.commit();

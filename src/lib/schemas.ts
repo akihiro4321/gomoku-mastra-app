@@ -41,6 +41,9 @@ export const BoardInfoSchema = z.object({
 
   // 有力な候補手（周囲2マス以内の空きマス）
   candidateMoves: z.array(z.string()),
+
+  // プログラムによる盤面解析結果（ヒューリスティック）
+  analysisText: z.string(),
 });
 
 

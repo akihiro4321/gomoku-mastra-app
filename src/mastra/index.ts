@@ -4,15 +4,15 @@ import { LangfuseExporter } from '@mastra/langfuse';
 import { LibSQLStore } from '@mastra/libsql';
 import { PinoLogger } from '@mastra/loggers';
 import { Observability } from '@mastra/observability';
-import { attackerAgent, commanderAgent, defenderAgent } from './agents/gomoku-agent';
+import { attackerAgent, commanderAgent, defenderAgent, gomokuAgentV2 } from './agents/gomoku-agent';
 import { weatherAgent } from './agents/weather-agent';
 import { completenessScorer, toolCallAppropriatenessScorer, translationScorer } from './scorers/weather-scorer';
-import { gomokuWorkflow } from './workflows/gomoku-workflow';
+import { gomokuWorkflow, gomokuWorkflowV2 } from './workflows/gomoku-workflow';
 import { weatherWorkflow } from './workflows/weather-workflow';
 
 export const mastra = new Mastra({
-  workflows: { weatherWorkflow, gomokuWorkflow },
-  agents: { weatherAgent, commanderAgent, attackerAgent, defenderAgent },
+  workflows: { weatherWorkflow, gomokuWorkflow, gomokuWorkflowV2 },
+  agents: { weatherAgent, commanderAgent, attackerAgent, defenderAgent, gomokuAgentV2 },
   scorers: { toolCallAppropriatenessScorer, completenessScorer, translationScorer },
   storage: new LibSQLStore({
     id: "mastra-storage",
