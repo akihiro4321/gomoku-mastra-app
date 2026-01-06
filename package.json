@@ -1,0 +1,36 @@
+{
+  "name": "gomoku-mastra-app",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "mastra dev",
+    "build": "mastra build",
+    "start": "mastra start",
+    "start cli": "tsx src/cli.ts"
+  },
+  "keywords": ["gomoku", "mastra", "ai", "game"],
+  "author": "",
+  "license": "MIT",
+  "description": "A Gomoku (Five in a Row) game powered by Mastra with multi-agent AI",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "dependencies": {
+    "@mastra/core": "^1.0.0-beta.19",
+    "@mastra/evals": "^1.0.0-beta.3",
+    "@mastra/langfuse": "^1.0.0-beta.9",
+    "@mastra/libsql": "^1.0.0-beta.10",
+    "@mastra/loggers": "^1.0.0-beta.3",
+    "@mastra/memory": "^1.0.0-beta.10",
+    "@mastra/observability": "^1.0.0-beta.9",
+    "zod": "^4.3.4"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.3",
+    "mastra": "^1.0.0-beta.12",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}
